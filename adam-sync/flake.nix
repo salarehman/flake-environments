@@ -10,20 +10,20 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        adamSync = pkgs.python3.pkgs.buildPythonApplication rec {
+        adamSync = pkgs.stdenv.mkDerivation rec {
           pname = "adam-sync";
           version = "0.1.0";
-          pyproject = false;
-          format = "other";
           src = ./.;
-          propagatedBuildInputs = with pkgs.python3.pkgs; [
-            requests
-            beautifulsoup4
-          ];
+          python = pkgs.python3.withPackages (ps: [ ps.requests ps.beautifulsoup4 ]);
+          buildInputs = [ pkgs.makeWrapper ];
           installPhase = ''
             runHook preInstall
             mkdir -p $out/bin
-            install -Dm755 adam_sync.py $out/bin/adam-sync
+            cp adam_sync.py $out/bin/adam-sync
+            chmod +x $out/bin/adam-sync
+            wrapProgram $out/bin/adam-sync \
+              --prefix PATH : ${pkgs.python3}/bin \
+              --prefix PYTHONPATH : ${python}/${pkgs.python3.sitePackages}
             runHook postInstall
           '';
         };
