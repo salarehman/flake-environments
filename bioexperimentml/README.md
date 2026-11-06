@@ -9,7 +9,7 @@ flake, so the whole project (format, validators, converters, docs, samples) is o
 > pass it through, e.g.:
 >
 > ```sh
-> nix develop --extra-access-tokens "github.com=$(gh auth token)"
+> nix develop --option access-tokens "github.com=$(gh auth token)"
 > ```
 >
 > or add an `access-tokens = github.com=<token>` entry to `~/.config/nix/nix.conf`.
