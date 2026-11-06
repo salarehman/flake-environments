@@ -14,3 +14,6 @@ flashcard flake that brings up a reproducible toolchain with `nix develop`,
   module included). See its `README.md`.
 - `adam-sync/` — Uni Basel ADAM (ILIAS) auto-sync: lädt neue Kursdateien
   als NixOS-Systemmodul + systemd-Timer (kein API nötig, Session-Cookies).
+- `bioexperimentml/` — strict wet-lab experiment records (format + validators +
+  converters + LLM extraction agent). Fetches the **private**
+  `github:salarehman/bioexperimentml` repo; needs GitHub auth for the fetcher.
