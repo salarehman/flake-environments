@@ -44,7 +44,12 @@ LOGIN_URL = BASE_URL + "ilias.php?baseClass=ilStartUpGUI&cmd=showLogin"
 POST_URL = BASE_URL + "ilias.php?baseClass=ilStartUpGUI&cmd=post&fallbackCmd=doStandardAuthentication"
 # Container-Typen, in die rekursiv hineingeschaut wird (ILIAS Objekttypen)
 CONTAINER_TYPES = {"fold", "grp", "sess", "cat"}
-MAX_DEPTH = 20
+# Diese Typen NICHT rekursiv durchlaufen (globale Navigation, keine Kursinhalte)
+SKIP_TYPES = {"root", "blog", "impr", "webr", "ldap"}
+# Bekannte globale ADAM-Navigations-Kategorien nicht mitkriechen
+SKIP_NAV_CATS = {1424024, 1593310, 179329}   # Hilfe&Support / ADAMtools / Kurse-mit-sync
+MAX_DEPTH = 8
+MAX_NODES = 400
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "adam-sync"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -88,7 +93,7 @@ def safe_name(name, max_len=150):
 
 
 def ref_from_href(href):
-    for pat in (r"[?&]ref_id=(\d+)", r"goto\.php/[a-z]+/(\d+)", r"[?&]target=[a-z]+_(\d+)"):
+    for pat in (r"[?&]ref_id=(\d+)", r"/(?:go|goto\.php)/[a-z]+/(\d+)", r"[?&]target=[a-z]+_(\d+)"):
         m = re.search(pat, href)
         if m:
             return int(m.group(1))
@@ -96,10 +101,10 @@ def ref_from_href(href):
 
 
 def type_from_href(href):
-    m = re.search(r"goto\.php/([a-z]+)/\d+", href) or re.search(r"[?&]target=([a-z]+)_\d+", href)
+    m = re.search(r"/(?:go|goto\.php)/([a-z]+)/\d+", href) or re.search(r"[?&]target=([a-z]+)_\d+", href)
     if m:
         return m.group(1)
-    if "cmd=sendfile" in href:
+    if "cmd=sendfile" in href or "cmd=readfile" in href:
         return "file"
     return None
 
@@ -222,18 +227,23 @@ def find_files(html):
     return out
 
 
-def walk(cfg, s: requests.Session, ref_id: int, depth: int, out: list, visited: set) -> None:
-    if depth > MAX_DEPTH or ref_id in visited:
+def walk(cfg, s: requests.Session, ref_id: int, fach: str, depth: int, out: list, visited: set) -> None:
+    if depth > MAX_DEPTH or ref_id in visited or len(out) > MAX_NODES:
         return
     visited.add(ref_id)
     target = f"goto.php?target=fold_{ref_id}"
     r = s.get(BASE_URL + target, timeout=30)
     html = r.text
     for node in find_files(html):
+        node["fach"] = fach
         if node["type"] == "file":
             out.append(node)
         elif node["type"] in CONTAINER_TYPES:
-            walk(cfg, s, node["ref"], depth + 1, out, visited)
+            if node["type"] in SKIP_TYPES:
+                continue
+            if node["type"] == "cat" and node["ref"] in SKIP_NAV_CATS:
+                continue
+            walk(cfg, s, node["ref"], fach, depth + 1, out, visited)
 
 
 def list_courses(cfg, s: requests.Session):
@@ -244,13 +254,14 @@ def list_courses(cfg, s: requests.Session):
 
 
 def sync_file(cfg, s, node, base_dir, dry_run):
-    # sendfile URL
-    dl = f"{BASE_URL}ilias.php?baseClass=ilObjFileGUI&cmd=sendfile&ref_id={node['ref']}"
+    # sendfile URL – aktueller ADAM braucht ilrepositorygui (ilObjFileGUI allein -> 404)
+    dl = f"{BASE_URL}ilias.php?baseClass=ilrepositorygui&cmdClass=ilObjFileGUI&cmd=sendfile&ref_id={node['ref']}"
     sig = file_signature(node.get("props", ""))
+    fach = node.get("fach", "")
     folder = node.get("folder", "")
-    target_dir = base_dir
+    target_dir = (base_dir / fach) if fach else base_dir
     if folder:
-        target_dir = base_dir / folder
+        target_dir = target_dir / folder
     target_dir.mkdir(parents=True, exist_ok=True)
     ext = ext_from_props(node.get("props", ""))
     fname = safe_name(node.get("file_name", "datei") + ext)
@@ -311,11 +322,16 @@ def cmd_sync(args):
     authed(s, cfg)
     base = Path(cfg["dest"])
     base.mkdir(parents=True, exist_ok=True)
-    # Einstiegspunkte: Root (root_1) – durchläuft persönliche Objekte
+    # Einstiegspunkte: roots = {course_ref: fach} ODER Liste (fach = "")
     found = []
     visited = set()
-    for root in cfg.get("roots", [1]):
-        walk(cfg, s, root, 0, found, visited)
+    roots = cfg.get("roots", [1])
+    if isinstance(roots, dict):
+        for ref, fach in roots.items():
+            walk(cfg, s, int(ref), fach or "", 0, found, visited)
+    else:
+        for root in roots:
+            walk(cfg, s, int(root), "", 0, found, visited)
     changed = 0
     for node in found:
         if sync_file(cfg, s, node, base, args.dry_run):
